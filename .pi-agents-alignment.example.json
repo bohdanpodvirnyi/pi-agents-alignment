@@ -2,6 +2,7 @@
   "githubOwner": "bohdanpodvirnyi",
   "githubProjectNumber": 1,
   "repo": "hos-agent",
+  "repoPath": "./hos-agent",
   "statusFieldName": "Status",
   "repoFieldName": "Repo",
   "branchFieldName": "Branch",

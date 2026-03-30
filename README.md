@@ -41,11 +41,13 @@ Create `.pi-agents-alignment.json` in your repo root.
   "githubOwner": "bohdanpodvirnyi",
   "githubProjectNumber": 1,
   "repo": "hos-agent",
+  "repoPath": "./hos-agent",
   "repoFieldName": "Work Repo"
 }
 ```
 
 Optional keys:
+- `repoPath` — relative path from config file to the git repo directory (required when pi's cwd isn't inside a git repo, e.g. multi-repo workspaces)
 - `statusFieldName`
 - `repoFieldName`
 - `branchFieldName`
@@ -61,6 +63,7 @@ You can also override with env vars:
 - `PI_ALIGNMENT_GITHUB_OWNER`
 - `PI_ALIGNMENT_GITHUB_PROJECT_NUMBER`
 - `PI_ALIGNMENT_REPO`
+- `PI_ALIGNMENT_REPO_PATH`
 - `PI_ALIGNMENT_STATUS_FIELD`
 - `PI_ALIGNMENT_REPO_FIELD`
 - `PI_ALIGNMENT_BRANCH_FIELD`

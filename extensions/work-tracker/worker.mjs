@@ -189,18 +189,37 @@ function updateSingleSelectField(cwd, projectId, itemId, fieldId, optionId) {
 	});
 }
 
+function resolveGitCwd(cwd, config) {
+	// Already in a git repo?
+	if (tryRun(cwd, "git", ["rev-parse", "--show-toplevel"])) return cwd;
+	// Try config.repo as subdirectory name
+	if (config.repo) {
+		const candidate = path.join(cwd, config.repo);
+		if (fs.existsSync(path.join(candidate, ".git"))) return candidate;
+	}
+	// Scan immediate subdirs as last resort
+	try {
+		for (const entry of fs.readdirSync(cwd, { withFileTypes: true })) {
+			if (!entry.isDirectory() || entry.name.startsWith(".")) continue;
+			if (fs.existsSync(path.join(cwd, entry.name, ".git"))) return path.join(cwd, entry.name);
+		}
+	} catch { /* ignore */ }
+	return cwd;
+}
+
 function getGitState(cwd) {
 	const config = loadConfig(cwd);
-	const root = tryRun(cwd, "git", ["rev-parse", "--show-toplevel"]);
-	if (!root) throw new Error("Not inside a git repository.");
-	const branch = tryRun(cwd, "git", ["branch", "--show-current"]) ?? "";
-	const headSha = tryRun(cwd, "git", ["rev-parse", "HEAD"]);
+	const gitCwd = resolveGitCwd(cwd, config);
+	const root = tryRun(gitCwd, "git", ["rev-parse", "--show-toplevel"]);
+	if (!root) throw new Error("Not inside a git repository. Ensure cwd is a git repo or config.repo points to one.");
+	const branch = tryRun(gitCwd, "git", ["branch", "--show-current"]) ?? "";
+	const headSha = tryRun(gitCwd, "git", ["rev-parse", "HEAD"]);
 	const defaultBranch =
-		parseRemoteHead(tryRun(cwd, "git", ["symbolic-ref", "refs/remotes/origin/HEAD"])) ??
-		tryRun(cwd, "gh", ["repo", "view", "--json", "defaultBranchRef", "--jq", ".defaultBranchRef.name"]);
-	const repo = config.repo ?? inferRepoName(cwd, root);
+		parseRemoteHead(tryRun(gitCwd, "git", ["symbolic-ref", "refs/remotes/origin/HEAD"])) ??
+		tryRun(gitCwd, "gh", ["repo", "view", "--json", "defaultBranchRef", "--jq", ".defaultBranchRef.name"]);
+	const repo = config.repo ?? inferRepoName(gitCwd, root);
 	const prUrl = branch
-		? tryRun(cwd, "gh", [
+		? tryRun(gitCwd, "gh", [
 				"pr",
 				"list",
 				"--state",
