@@ -10,7 +10,7 @@
   "statuses": {
     "todo": "Todo",
     "inProgress": "In Progress",
-    "finished": "Finished"
+    "finished": "Done"
   },
   "askKeywords": ["implement", "build", "add", "create", "fix", "refactor", "feature"],
   "finishCheckIntervalMs": 60000

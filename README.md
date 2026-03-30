@@ -40,7 +40,8 @@ Create `.pi-agents-alignment.json` in your repo root.
 {
   "githubOwner": "bohdanpodvirnyi",
   "githubProjectNumber": 1,
-  "repo": "hos-agent"
+  "repo": "hos-agent",
+  "repoFieldName": "Work Repo"
 }
 ```
 
@@ -73,7 +74,7 @@ You can also override with env vars:
 
 Expected fields:
 - `Status` — single select
-- `Repo` — text
+- `Work Repo` (or your configured repo field) — text
 - `Branch` — text
 - `PR URL` — text
 - `Agent` — text
@@ -81,7 +82,7 @@ Expected fields:
 Default statuses expected:
 - `Todo`
 - `In Progress`
-- `Finished`
+- `Done`
 
 Project items are created as **draft items**.
 
@@ -105,4 +106,4 @@ npm run check
 - Uses local `gh` auth; no GitHub App.
 - GitHub sync runs in a separate worker process.
 - Failures are non-fatal; coding continues.
-- v0 intentionally keeps state coarse: `Todo`, `In Progress`, `Finished`.
+- v0 intentionally keeps state coarse: `Todo`, `In Progress`, `Done`.

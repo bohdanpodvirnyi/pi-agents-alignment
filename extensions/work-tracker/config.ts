@@ -45,7 +45,7 @@ const DEFAULT_CONFIG: Omit<TrackerConfig, "githubOwner" | "githubProjectNumber">
 	statuses: {
 		todo: "Todo",
 		inProgress: "In Progress",
-		finished: "Finished",
+		finished: "Done",
 	},
 	askKeywords: ["implement", "build", "add", "create", "fix", "refactor", "feature"],
 	finishCheckIntervalMs: 60_000,
