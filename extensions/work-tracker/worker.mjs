@@ -13,7 +13,7 @@ const DEFAULTS = {
 	statuses: {
 		todo: "Todo",
 		inProgress: "In Progress",
-		finished: "Finished",
+		finished: "Done",
 	},
 };
 
@@ -74,11 +74,7 @@ function loadConfig(cwd) {
 
 function getProjectSnapshot(cwd) {
 	const config = loadConfig(cwd);
-	const data = ghGraphql(cwd, PROJECT_QUERY, {
-		owner: config.githubOwner,
-		number: config.githubProjectNumber,
-	});
-	const project = extractProject(data);
+	const project = fetchProject(cwd, config);
 	if (!project) {
 		throw new Error(`Project ${config.githubOwner}#${config.githubProjectNumber} not found.`);
 	}
@@ -130,11 +126,7 @@ function applyFieldUpdates(cwd, snapshot, itemId, payload) {
 }
 
 function getProjectData(cwd, config) {
-	const data = ghGraphql(cwd, PROJECT_QUERY, {
-		owner: config.githubOwner,
-		number: config.githubProjectNumber,
-	});
-	const project = extractProject(data);
+	const project = fetchProject(cwd, config);
 	if (!project) throw new Error(`Project ${config.githubOwner}#${config.githubProjectNumber} not found.`);
 	const fieldMap = new Map();
 	const statusOptions = new Map();
@@ -247,8 +239,19 @@ function ghGraphql(cwd, query, variables) {
 	return parsed.data ?? parsed;
 }
 
-function extractProject(data) {
-	return data.user?.projectV2;
+function fetchProject(cwd, config) {
+	const variables = {
+		owner: config.githubOwner,
+		number: config.githubProjectNumber,
+	};
+	const userProject = extractProject(ghGraphql(cwd, USER_PROJECT_QUERY, variables), "user");
+	if (userProject) return userProject;
+	const orgProject = extractProject(ghGraphql(cwd, ORG_PROJECT_QUERY, variables), "organization");
+	return orgProject;
+}
+
+function extractProject(data, key) {
+	return data[key]?.projectV2;
 }
 
 function tryRun(cwd, command, args) {
@@ -287,63 +290,73 @@ function formatError(error) {
 	return String(error);
 }
 
-const PROJECT_QUERY = `
-query($owner: String!, $number: Int!) {
-  user(login: $owner) {
-    projectV2(number: $number) {
-      id
-      fields(first: 50) {
-        nodes {
-          ... on ProjectV2FieldCommon {
-            id
-            name
-            dataType
-          }
-          ... on ProjectV2SingleSelectField {
-            id
-            name
-            dataType
-            options {
-              id
-              name
-            }
-          }
+const PROJECT_SELECTION = `
+projectV2(number: $number) {
+  id
+  fields(first: 50) {
+    nodes {
+      ... on ProjectV2FieldCommon {
+        id
+        name
+        dataType
+      }
+      ... on ProjectV2SingleSelectField {
+        id
+        name
+        dataType
+        options {
+          id
+          name
         }
       }
-      items(first: 100) {
+    }
+  }
+  items(first: 100) {
+    nodes {
+      id
+      content {
+        ... on DraftIssue {
+          title
+        }
+        ... on Issue {
+          title
+        }
+      }
+      fieldValues(first: 50) {
         nodes {
-          id
-          content {
-            ... on DraftIssue {
-              title
-            }
-            ... on Issue {
-              title
+          ... on ProjectV2ItemFieldTextValue {
+            text
+            field {
+              ... on ProjectV2FieldCommon {
+                name
+              }
             }
           }
-          fieldValues(first: 50) {
-            nodes {
-              ... on ProjectV2ItemFieldTextValue {
-                text
-                field {
-                  ... on ProjectV2FieldCommon {
-                    name
-                  }
-                }
-              }
-              ... on ProjectV2ItemFieldSingleSelectValue {
+          ... on ProjectV2ItemFieldSingleSelectValue {
+            name
+            field {
+              ... on ProjectV2FieldCommon {
                 name
-                field {
-                  ... on ProjectV2FieldCommon {
-                    name
-                  }
-                }
               }
             }
           }
         }
       }
     }
+  }
+}`.trim();
+
+const USER_PROJECT_QUERY = `
+query($owner: String!, $number: Int!) {
+  user(login: $owner) {
+    ${PROJECT_SELECTION}
+  }
+}`.trim();
+
+const ORG_PROJECT_QUERY = `
+query($owner: String!, $number: Int!) {
+  organization(login: $owner) {
+    ${PROJECT_SELECTION}
   }
 }`.trim();
 
