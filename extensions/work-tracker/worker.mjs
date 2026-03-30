@@ -247,7 +247,7 @@ function ghGraphql(cwd, query, variables) {
 }
 
 function extractProject(data) {
-	return data.user?.projectV2 ?? data.organization?.projectV2;
+	return data.user?.projectV2;
 }
 
 function tryRun(cwd, command, args) {
@@ -289,62 +289,6 @@ function formatError(error) {
 const PROJECT_QUERY = `
 query($owner: String!, $number: Int!) {
   user(login: $owner) {
-    projectV2(number: $number) {
-      id
-      fields(first: 50) {
-        nodes {
-          ... on ProjectV2FieldCommon {
-            id
-            name
-            dataType
-          }
-          ... on ProjectV2SingleSelectField {
-            id
-            name
-            dataType
-            options {
-              id
-              name
-            }
-          }
-        }
-      }
-      items(first: 100) {
-        nodes {
-          id
-          content {
-            ... on DraftIssue {
-              title
-            }
-            ... on Issue {
-              title
-            }
-          }
-          fieldValues(first: 50) {
-            nodes {
-              ... on ProjectV2ItemFieldTextValue {
-                text
-                field {
-                  ... on ProjectV2FieldCommon {
-                    name
-                  }
-                }
-              }
-              ... on ProjectV2ItemFieldSingleSelectValue {
-                name
-                field {
-                  ... on ProjectV2FieldCommon {
-                    name
-                  }
-                }
-              }
-            }
-          }
-        }
-      }
-    }
-  }
-  organization(login: $owner) {
     projectV2(number: $number) {
       id
       fields(first: 50) {
