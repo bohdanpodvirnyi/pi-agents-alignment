@@ -3,6 +3,8 @@ import { fileURLToPath } from "node:url";
 
 export interface ProjectItemSummary {
 	id: string;
+	contentId?: string;
+	contentUrl?: string;
 	title: string;
 	status?: string;
 	repo?: string;
@@ -48,16 +50,23 @@ export async function runWorker<T>(cwd: string, payload: WorkerRequest): Promise
 		});
 		child.on("error", reject);
 		child.on("close", (code) => {
-			if (code !== 0) {
-				reject(new Error(stderr.trim() || `Worker exited with code ${code}`));
-				return;
-			}
 			try {
-				const parsed = JSON.parse(stdout) as WorkerResponse<T>;
-				if (!parsed.ok) reject(new Error(parsed.error));
-				else resolve(parsed.result);
+				if (stdout.trim()) {
+					const parsed = JSON.parse(stdout) as WorkerResponse<T>;
+					if (!parsed.ok) {
+						reject(new Error(parsed.error));
+						return;
+					}
+					resolve(parsed.result);
+					return;
+				}
+				if (code !== 0) {
+					reject(new Error(stderr.trim() || `Worker exited with code ${code}`));
+					return;
+				}
+				reject(new Error("Worker returned no output"));
 			} catch (error) {
-				reject(new Error(`Failed to parse worker output: ${String(error)}\n${stdout}`));
+				reject(new Error(`Failed to parse worker output: ${String(error)}\n${stdout || stderr}`));
 			}
 		});
 		child.stdin.end(JSON.stringify(payload));

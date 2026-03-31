@@ -74,6 +74,8 @@ export default function alignment(pi: ExtensionAPI) {
 					mode: "aligned",
 					itemId: branchMatch.id,
 					itemTitle: branchMatch.title,
+					contentId: branchMatch.contentId,
+					contentUrl: branchMatch.contentUrl,
 					statusKey: effectiveKey,
 					repo: gitState.repo,
 					branch: gitState.branch,
@@ -96,7 +98,7 @@ export default function alignment(pi: ExtensionAPI) {
 				}
 			} else {
 				const title = generateSummary(state.pendingPrompt ?? "Untitled work");
-				const created = await runWorker<{ itemId: string; title: string }>(ctx.cwd, {
+				const created = await runWorker<{ itemId: string; title: string; contentId?: string; contentUrl?: string }>(ctx.cwd, {
 					command: "createItem",
 					title,
 					body: buildDraftBody(state.pendingPrompt ?? "", gitState),
@@ -111,6 +113,8 @@ export default function alignment(pi: ExtensionAPI) {
 					mode: "aligned",
 					itemId: created.itemId,
 					itemTitle: created.title,
+					contentId: created.contentId,
+					contentUrl: created.contentUrl,
 					statusKey: "inProgress",
 					repo: gitState.repo,
 					branch: gitState.branch,
@@ -133,6 +137,115 @@ export default function alignment(pi: ExtensionAPI) {
 
 	// ── Sync helpers ────────────────────────────────────────────────────
 
+	const isMissingItemError = (error: unknown) => {
+		const message = messageOf(error).toLowerCase();
+		return (
+			message.includes("projectv2item") ||
+			message.includes("could not resolve") ||
+			message.includes("not found") ||
+			message.includes("does not exist")
+		);
+	};
+
+	const recoverMissingItem = async (ctx: ExtensionContext, nextStatus: StatusKey, extra: Partial<GitState> = {}) => {
+		if (state.mode !== "aligned") return false;
+		const config = getConfig(ctx);
+		if (!config) return false;
+
+		const gitState = extra.branch || extra.repo || extra.prUrl ? ({
+			repo: extra.repo ?? state.repo ?? "",
+			branch: extra.branch ?? state.branch ?? "",
+			prUrl: extra.prUrl ?? state.prUrl,
+			defaultBranch: undefined,
+			headSha: state.baseHeadSha,
+			repoFullName: undefined,
+		} satisfies Partial<GitState>) : await runWorker<GitState>(ctx.cwd, { command: "gitState" });
+		const snapshot = await runWorker<ProjectSnapshot>(ctx.cwd, { command: "projectSnapshot" });
+		const branchMatch = gitState.branch ? snapshot.items.find((item) => item.branch === gitState.branch) : undefined;
+
+		if (branchMatch) {
+			await runWorker(ctx.cwd, {
+				command: "updateItem",
+				itemId: branchMatch.id,
+				statusKey: nextStatus,
+				repo: gitState.repo ?? state.repo,
+				branch: gitState.branch ?? state.branch,
+				prUrl: gitState.prUrl ?? state.prUrl,
+				agent: "pi",
+			});
+			saveState({
+				mode: "aligned",
+				itemId: branchMatch.id,
+				itemTitle: branchMatch.title,
+				contentId: branchMatch.contentId,
+				contentUrl: branchMatch.contentUrl,
+				statusKey: nextStatus,
+				repo: gitState.repo ?? state.repo,
+				branch: gitState.branch ?? state.branch,
+				prUrl: gitState.prUrl ?? state.prUrl,
+				lastSyncAt: Date.now(),
+			});
+			updateStatus(ctx);
+			ctx.ui.notify("alignment recovered: re-linked existing project item", "info");
+			return true;
+		}
+
+		if (state.contentId) {
+			try {
+				const readded = await runWorker<{ itemId: string }>(ctx.cwd, {
+					command: "addItemByContentId",
+					contentId: state.contentId,
+					statusKey: nextStatus,
+					repo: gitState.repo ?? state.repo,
+					branch: gitState.branch ?? state.branch,
+					prUrl: gitState.prUrl ?? state.prUrl,
+					agent: "pi",
+				});
+				saveState({
+					mode: "aligned",
+					itemId: readded.itemId,
+					statusKey: nextStatus,
+					repo: gitState.repo ?? state.repo,
+					branch: gitState.branch ?? state.branch,
+					prUrl: gitState.prUrl ?? state.prUrl,
+					lastSyncAt: Date.now(),
+				});
+				updateStatus(ctx);
+				ctx.ui.notify("alignment recovered: re-added existing issue to project", "info");
+				return true;
+			} catch {
+				// Fall through to recreation
+			}
+		}
+
+		const title = state.itemTitle ?? generateSummary(state.pendingPrompt ?? "Untitled work");
+		const created = await runWorker<{ itemId: string; title: string; contentId?: string; contentUrl?: string }>(ctx.cwd, {
+			command: "createItem",
+			title,
+			body: buildDraftBody(state.pendingPrompt ?? title, gitState as GitState),
+			repoFullName: (gitState as GitState).repoFullName,
+			statusKey: nextStatus,
+			repo: gitState.repo ?? state.repo,
+			branch: gitState.branch ?? state.branch,
+			agent: "pi",
+		});
+		saveState({
+			mode: "aligned",
+			itemId: created.itemId,
+			itemTitle: created.title,
+			contentId: created.contentId,
+			contentUrl: created.contentUrl,
+			statusKey: nextStatus,
+			repo: gitState.repo ?? state.repo,
+			branch: gitState.branch ?? state.branch,
+			prUrl: gitState.prUrl ?? state.prUrl,
+			lastSyncAt: Date.now(),
+		});
+		updateStatus(ctx);
+		ctx.ui.notify("alignment recovered: created replacement project item", "warning");
+		return true;
+	};
+
 	const syncItem = (ctx: ExtensionContext, nextStatus: StatusKey, extra: Partial<GitState> = {}) => {
 		if (state.mode !== "aligned" || !state.itemId) return;
 		const config = getConfig(ctx);
@@ -153,15 +266,20 @@ export default function alignment(pi: ExtensionAPI) {
 				extra.branch || extra.repo || extra.prUrl
 					? undefined
 					: await runWorker<GitState>(ctx.cwd, { command: "gitState" });
-			await runWorker(ctx.cwd, {
-				command: "updateItem",
-				itemId,
-				statusKey: nextStatus,
-				repo: extra.repo ?? latestGit?.repo ?? state.repo,
-				branch: extra.branch ?? latestGit?.branch ?? state.branch,
-				prUrl: extra.prUrl ?? latestGit?.prUrl ?? state.prUrl,
-				agent: "pi",
-			});
+			try {
+				await runWorker(ctx.cwd, {
+					command: "updateItem",
+					itemId,
+					statusKey: nextStatus,
+					repo: extra.repo ?? latestGit?.repo ?? state.repo,
+					branch: extra.branch ?? latestGit?.branch ?? state.branch,
+					prUrl: extra.prUrl ?? latestGit?.prUrl ?? state.prUrl,
+					agent: "pi",
+				});
+			} catch (error) {
+				if (!isMissingItemError(error)) throw error;
+				await recoverMissingItem(ctx, nextStatus, latestGit ?? extra);
+			}
 		});
 	};
 
@@ -286,16 +404,22 @@ export default function alignment(pi: ExtensionAPI) {
 			}
 			enqueueBackground(ctx, async () => {
 				const gitState = await runWorker<GitState>(ctx.cwd, { command: "gitState" });
-				await runWorker(ctx.cwd, {
-					command: "updateItem",
-					itemId: state.itemId,
-					statusKey: state.statusKey ?? "inProgress",
-					repo: gitState.repo,
-					branch: gitState.branch,
-					prUrl: gitState.prUrl,
-					agent: "pi",
-				});
-				ctx.ui.notify("alignment synced", "info");
+				try {
+					await runWorker(ctx.cwd, {
+						command: "updateItem",
+						itemId: state.itemId,
+						statusKey: state.statusKey ?? "inProgress",
+						repo: gitState.repo,
+						branch: gitState.branch,
+						prUrl: gitState.prUrl,
+						agent: "pi",
+					});
+					ctx.ui.notify("alignment synced", "info");
+				} catch (error) {
+					if (!isMissingItemError(error) || !(await recoverMissingItem(ctx, state.statusKey ?? "inProgress", gitState))) {
+						throw error;
+					}
+				}
 			});
 		},
 	});

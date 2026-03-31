@@ -8,6 +8,8 @@ export interface AlignmentState {
 	pendingPrompt?: string;
 	itemId?: string;
 	itemTitle?: string;
+	contentId?: string;
+	contentUrl?: string;
 	statusKey?: StatusKey;
 	repo?: string;
 	branch?: string;

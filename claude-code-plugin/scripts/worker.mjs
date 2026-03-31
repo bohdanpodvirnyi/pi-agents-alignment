@@ -37,6 +37,8 @@ async function handle(payload) {
 			return getProjectSnapshot(process.cwd());
 		case "createItem":
 			return createItem(process.cwd(), payload);
+		case "addItemByContentId":
+			return addItemByContentId(process.cwd(), payload);
 		case "updateItem":
 			return updateItem(process.cwd(), payload);
 		case "gitState":
@@ -96,6 +98,8 @@ function createItem(cwd, payload) {
 	const repoFullName = payload.repoFullName;
 
 	let itemId;
+	let contentId;
+	let contentUrl;
 
 	// Try creating a real issue (supports assignees)
 	if (repoFullName) {
@@ -107,7 +111,8 @@ function createItem(cwd, payload) {
 				...(currentUser ? { assignees: [currentUser] } : {}),
 			};
 			const issue = ghRest(cwd, "POST", `/repos/${repoFullName}/issues`, issueBody);
-			const contentId = issue.node_id;
+			contentId = issue.node_id;
+			contentUrl = issue.html_url;
 			if (contentId) {
 				const added = ghGraphql(cwd, ADD_ITEM_BY_CONTENT_MUTATION, {
 					projectId: snapshot.project.id,
@@ -132,7 +137,21 @@ function createItem(cwd, payload) {
 
 	if (!itemId) throw new Error("GitHub did not return created project item id.");
 	applyFieldUpdates(cwd, snapshot, itemId, payload);
-	return { itemId, title };
+	return { itemId, title, contentId, contentUrl };
+}
+
+function addItemByContentId(cwd, payload) {
+	const snapshot = getProjectData(cwd, loadConfig(cwd));
+	const contentId = String(payload.contentId ?? "").trim();
+	if (!contentId) throw new Error("addItemByContentId requires contentId");
+	const added = ghGraphql(cwd, ADD_ITEM_BY_CONTENT_MUTATION, {
+		projectId: snapshot.project.id,
+		contentId,
+	});
+	const itemId = added.addProjectV2ItemById?.item?.id;
+	if (!itemId) throw new Error("GitHub did not return added project item id.");
+	applyFieldUpdates(cwd, snapshot, itemId, payload);
+	return { itemId };
 }
 
 function updateItem(cwd, payload) {
@@ -182,6 +201,8 @@ function mapProjectItem(node, config) {
 	const values = fieldValuesToMap(node.fieldValues?.nodes ?? []);
 	return {
 		id: node.id,
+		contentId: content.id,
+		contentUrl: content.url,
 		title: content.title ?? "",
 		status: values.get(config.statusFieldName),
 		repo: values.get(config.repoFieldName),
@@ -397,10 +418,13 @@ projectV2(number: $number) {
       id
       content {
         ... on DraftIssue {
+          id
           title
         }
         ... on Issue {
+          id
           title
+          url
         }
       }
       fieldValues(first: 50) {

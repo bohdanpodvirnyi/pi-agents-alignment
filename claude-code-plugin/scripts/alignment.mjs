@@ -104,16 +104,23 @@ async function handleCommand(command, sessionId, cwd) {
 			const config = loadConfig(cwd);
 			if (!config) return;
 			const gitState = runWorker(cwd, { command: "gitState" });
-			runWorker(cwd, {
-				command: "updateItem",
-				itemId: state.itemId,
-				statusKey: state.statusKey ?? "inProgress",
-				repo: gitState.repo,
-				branch: gitState.branch,
-				prUrl: gitState.prUrl,
-				agent: "claude-code",
-			});
-			console.log("✓ synced");
+			try {
+				runWorker(cwd, {
+					command: "updateItem",
+					itemId: state.itemId,
+					statusKey: state.statusKey ?? "inProgress",
+					repo: gitState.repo,
+					branch: gitState.branch,
+					prUrl: gitState.prUrl,
+					agent: "claude-code",
+				});
+				console.log("✓ synced");
+			} catch (error) {
+				if (!isMissingItemError(error) || !(await recoverMissingItem(sessionId, cwd, config, state, state.statusKey ?? "inProgress", gitState))) {
+					throw error;
+				}
+				console.log("✓ recovered and synced");
+			}
 			break;
 		}
 		default:
@@ -148,6 +155,8 @@ async function createOrLinkItem(sessionId, cwd, config, state) {
 			mode: "aligned",
 			itemId: branchMatch.id,
 			itemTitle: branchMatch.title,
+			contentId: branchMatch.contentId,
+			contentUrl: branchMatch.contentUrl,
 			statusKey: effectiveKey,
 			repo: gitState.repo,
 			repoFullName: gitState.repoFullName,
@@ -193,6 +202,8 @@ async function createOrLinkItem(sessionId, cwd, config, state) {
 			mode: "aligned",
 			itemId: created.itemId,
 			itemTitle: created.title,
+			contentId: created.contentId,
+			contentUrl: created.contentUrl,
 			statusKey: "inProgress",
 			repo: gitState.repo,
 			repoFullName: gitState.repoFullName,
@@ -202,6 +213,112 @@ async function createOrLinkItem(sessionId, cwd, config, state) {
 			lastSyncAt: Date.now(),
 		});
 	}
+}
+
+function isMissingItemError(error) {
+	const message = messageOf(error).toLowerCase();
+	return (
+		message.includes("projectv2item") ||
+		message.includes("could not resolve") ||
+		message.includes("not found") ||
+		message.includes("does not exist")
+	);
+}
+
+async function recoverMissingItem(sessionId, cwd, config, state, nextStatus, extra = {}) {
+	if (state.mode !== "aligned") return false;
+
+	const gitState = extra.branch || extra.repo || extra.prUrl
+		? {
+			repo: extra.repo ?? state.repo ?? "",
+			branch: extra.branch ?? state.branch ?? "",
+			prUrl: extra.prUrl ?? state.prUrl,
+			defaultBranch: undefined,
+			headSha: state.baseHeadSha,
+			repoFullName: undefined,
+		}
+		: runWorker(cwd, { command: "gitState" });
+	const snapshot = runWorker(cwd, { command: "projectSnapshot" });
+	const branchMatch = gitState.branch ? snapshot.items.find((item) => item.branch === gitState.branch) : undefined;
+
+	if (branchMatch) {
+		runWorker(cwd, {
+			command: "updateItem",
+			itemId: branchMatch.id,
+			statusKey: nextStatus,
+			repo: gitState.repo ?? state.repo,
+			branch: gitState.branch ?? state.branch,
+			prUrl: gitState.prUrl ?? state.prUrl,
+			agent: "claude-code",
+		});
+		writeState(sessionId, {
+			...state,
+			mode: "aligned",
+			itemId: branchMatch.id,
+			itemTitle: branchMatch.title,
+			contentId: branchMatch.contentId,
+			contentUrl: branchMatch.contentUrl,
+			statusKey: nextStatus,
+			repo: gitState.repo ?? state.repo,
+			branch: gitState.branch ?? state.branch,
+			prUrl: gitState.prUrl ?? state.prUrl,
+			lastSyncAt: Date.now(),
+		});
+		return true;
+	}
+
+	if (state.contentId) {
+		try {
+			const readded = runWorker(cwd, {
+				command: "addItemByContentId",
+				contentId: state.contentId,
+				statusKey: nextStatus,
+				repo: gitState.repo ?? state.repo,
+				branch: gitState.branch ?? state.branch,
+				prUrl: gitState.prUrl ?? state.prUrl,
+				agent: "claude-code",
+			});
+			writeState(sessionId, {
+				...state,
+				mode: "aligned",
+				itemId: readded.itemId,
+				statusKey: nextStatus,
+				repo: gitState.repo ?? state.repo,
+				branch: gitState.branch ?? state.branch,
+				prUrl: gitState.prUrl ?? state.prUrl,
+				lastSyncAt: Date.now(),
+			});
+			return true;
+		} catch {
+			// fall through
+		}
+	}
+
+	const title = state.itemTitle ?? generateSummary(state.pendingPrompt ?? "Untitled work");
+	const created = runWorker(cwd, {
+		command: "createItem",
+		title,
+		body: buildDraftBody(state.pendingPrompt ?? title, gitState),
+		repoFullName: gitState.repoFullName,
+		statusKey: nextStatus,
+		repo: gitState.repo ?? state.repo,
+		branch: gitState.branch ?? state.branch,
+		agent: "claude-code",
+	});
+	writeState(sessionId, {
+		...state,
+		mode: "aligned",
+		itemId: created.itemId,
+		itemTitle: created.title,
+		contentId: created.contentId,
+		contentUrl: created.contentUrl,
+		statusKey: nextStatus,
+		repo: gitState.repo ?? state.repo,
+		branch: gitState.branch ?? state.branch,
+		prUrl: gitState.prUrl ?? state.prUrl,
+		lastSyncAt: Date.now(),
+	});
+	return true;
 }
 
 function syncItem(sessionId, cwd, config, state, nextStatus, extra = {}) {
@@ -217,15 +334,20 @@ function syncItem(sessionId, cwd, config, state, nextStatus, extra = {}) {
 	};
 	writeState(sessionId, updated);
 
-	tryWorker(cwd, {
-		command: "updateItem",
-		itemId: state.itemId,
-		statusKey: nextStatus,
-		repo: extra.repo ?? state.repo,
-		branch: extra.branch ?? state.branch,
-		prUrl: extra.prUrl ?? state.prUrl,
-		agent: "claude-code",
-	});
+	try {
+		runWorker(cwd, {
+			command: "updateItem",
+			itemId: state.itemId,
+			statusKey: nextStatus,
+			repo: extra.repo ?? state.repo,
+			branch: extra.branch ?? state.branch,
+			prUrl: extra.prUrl ?? state.prUrl,
+			agent: "claude-code",
+		});
+	} catch (error) {
+		if (!isMissingItemError(error)) return;
+		void recoverMissingItem(sessionId, cwd, config, updated, nextStatus, extra);
+	}
 }
 
 function checkForFinish(sessionId, cwd, config, state) {
@@ -357,16 +479,32 @@ function generateSummary(prompt) {
 // ── Worker ──────────────────────────────────────────────────────────────
 
 function runWorker(cwd, payload) {
-	const raw = execFileSync(process.execPath, [WORKER_PATH], {
-		cwd,
-		input: JSON.stringify(payload),
-		encoding: "utf8",
-		stdio: ["pipe", "pipe", "pipe"],
-		timeout: 25_000,
-	});
-	const parsed = JSON.parse(raw);
-	if (!parsed.ok) throw new Error(parsed.error);
-	return parsed.result;
+	try {
+		const raw = execFileSync(process.execPath, [WORKER_PATH], {
+			cwd,
+			input: JSON.stringify(payload),
+			encoding: "utf8",
+			stdio: ["pipe", "pipe", "pipe"],
+			timeout: 25_000,
+		});
+		const parsed = JSON.parse(raw);
+		if (!parsed.ok) throw new Error(parsed.error);
+		return parsed.result;
+	} catch (error) {
+		const stdout = error && typeof error === "object" && "stdout" in error ? String(error.stdout || "") : "";
+		const stderr = error && typeof error === "object" && "stderr" in error ? String(error.stderr || "") : "";
+		if (stdout.trim()) {
+			let parsed;
+			try {
+				parsed = JSON.parse(stdout);
+			} catch (parseError) {
+				throw new Error(`Failed to parse worker output: ${String(parseError)}\n${stdout || stderr}`);
+			}
+			if (!parsed.ok) throw new Error(parsed.error);
+			return parsed.result;
+		}
+		throw error;
+	}
 }
 
 function tryWorker(cwd, payload) {
@@ -390,6 +528,11 @@ function buildDraftBody(prompt, gitState) {
 		"Prompt excerpt:",
 		excerpt,
 	].join("\n");
+}
+
+function messageOf(error) {
+	if (error instanceof Error) return error.message;
+	return String(error);
 }
 
 function readStdin() {
