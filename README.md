@@ -101,7 +101,7 @@ Examples:
 /align
 ```
 
-Start tracking immediately, even before the first edit/write.
+Start tracking immediately, even before the first edit/write. If you don't pass text, alignment infers a title from recent session prompts.
 
 ```text
 /align fix extension loading conflict

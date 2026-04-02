@@ -6,6 +6,7 @@ export type AlignmentMode = "idle" | "pending" | "aligned" | "unlinked";
 export interface AlignmentState {
 	mode: AlignmentMode;
 	pendingPrompt?: string;
+	recentPrompts?: string[];
 	itemId?: string;
 	itemTitle?: string;
 	contentId?: string;

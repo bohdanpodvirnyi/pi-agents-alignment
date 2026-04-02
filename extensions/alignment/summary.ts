@@ -9,6 +9,11 @@ const LEADING_PHRASES = [
 	/^help me\s+/i,
 ];
 
+const MAX_RECENT_PROMPTS = 8;
+const SLASH_COMMAND_RE = /^\/\S+/;
+const LIGHTWEIGHT_FOLLOW_UP_RE =
+	/^(yes|yeah|yep|yup|ok|okay|sure|also|and|plus|pls|please|thanks|thx|do it|go ahead|continue|ship it|push( it)?|commit( it)?|release( it)?|tag( it)?|new tag as well|update docs|docs)$/i;
+
 export function generateSummary(prompt: string): string {
 	const singleLine = prompt.replace(/```[\s\S]*?```/g, " ").replace(/\s+/g, " ").trim();
 	const firstSentence = singleLine.split(/[.!?]\s/)[0] ?? singleLine;
@@ -18,6 +23,27 @@ export function generateSummary(prompt: string): string {
 	if (!summary) summary = "Untitled work";
 	if (summary.length > 72) summary = `${summary.slice(0, 69).trimEnd()}...`;
 	return capitalize(summary);
+}
+
+export function appendRecentPrompt(prompts: string[] | undefined, prompt: string): string[] {
+	const cleaned = normalizePrompt(prompt);
+	if (!cleaned) return prompts ?? [];
+	const next = [...(prompts ?? [])];
+	if (next[next.length - 1] !== cleaned) next.push(cleaned);
+	return next.slice(-MAX_RECENT_PROMPTS);
+}
+
+export function inferPromptFromHistory(prompts: string[] | undefined): string | undefined {
+	const cleaned = (prompts ?? []).map(normalizePrompt).filter(Boolean);
+	if (cleaned.length === 0) return undefined;
+
+	for (let i = cleaned.length - 1; i >= 0; i -= 1) {
+		const prompt = cleaned[i]!;
+		if (SLASH_COMMAND_RE.test(prompt)) continue;
+		if (!isLightweightFollowUp(prompt)) return prompt;
+	}
+
+	return cleaned.find((prompt) => !SLASH_COMMAND_RE.test(prompt));
 }
 
 export function rankSimilarItems(summary: string, items: ProjectItemSummary[]): Array<ProjectItemSummary & { score: number }> {
@@ -40,6 +66,14 @@ function similarityScore(left: string, right: string): number {
 	const rightLower = right.toLowerCase();
 	const substringBonus = leftLower.includes(rightLower) || rightLower.includes(leftLower) ? 0.2 : 0;
 	return Math.min(1, jaccard + substringBonus);
+}
+
+function normalizePrompt(prompt: string): string {
+	return prompt.replace(/```[\s\S]*?```/g, " ").replace(/\s+/g, " ").trim();
+}
+
+function isLightweightFollowUp(prompt: string): boolean {
+	return prompt.length <= 24 || LIGHTWEIGHT_FOLLOW_UP_RE.test(prompt);
 }
 
 function tokenize(value: string): Set<string> {

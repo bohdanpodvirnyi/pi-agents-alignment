@@ -1,6 +1,6 @@
 import type { ExtensionAPI, ExtensionContext } from "@mariozechner/pi-coding-agent";
 import { loadAlignmentConfig, statusLabelToKey } from "./config.js";
-import { generateSummary } from "./summary.js";
+import { appendRecentPrompt, generateSummary, inferPromptFromHistory } from "./summary.js";
 import { emptyState, loadState, persistState, type StatusKey, type AlignmentState } from "./state.js";
 import { runWorker, type GitState, type ProjectSnapshot } from "./worker-client.js";
 
@@ -29,6 +29,10 @@ export default function alignment(pi: ExtensionAPI) {
 
 	const getConfig = (ctx: ExtensionContext) => {
 		return loadAlignmentConfig(ctx.cwd)?.config;
+	};
+
+	const getPromptSeed = () => {
+		return state.pendingPrompt || inferPromptFromHistory(state.recentPrompts) || "Current session work";
 	};
 
 	const updateStatus = (ctx: ExtensionContext) => {
@@ -97,11 +101,12 @@ export default function alignment(pi: ExtensionAPI) {
 					});
 				}
 			} else {
-				const title = generateSummary(state.pendingPrompt ?? "Untitled work");
+				const promptSeed = getPromptSeed();
+				const title = generateSummary(promptSeed);
 				const created = await runWorker<{ itemId: string; title: string; contentId?: string; contentUrl?: string }>(ctx.cwd, {
 					command: "createItem",
 					title,
-					body: buildDraftBody(state.pendingPrompt ?? "", gitState),
+					body: buildDraftBody(promptSeed, gitState),
 					repoFullName: gitState.repoFullName,
 					statusKey: "inProgress",
 					repo: gitState.repo,
@@ -218,11 +223,12 @@ export default function alignment(pi: ExtensionAPI) {
 			}
 		}
 
-		const title = state.itemTitle ?? generateSummary(state.pendingPrompt ?? "Untitled work");
+		const promptSeed = getPromptSeed();
+		const title = state.itemTitle ?? generateSummary(promptSeed);
 		const created = await runWorker<{ itemId: string; title: string; contentId?: string; contentUrl?: string }>(ctx.cwd, {
 			command: "createItem",
 			title,
-			body: buildDraftBody(state.pendingPrompt ?? title, gitState as GitState),
+			body: buildDraftBody(state.pendingPrompt ?? promptSeed, gitState as GitState),
 			repoFullName: (gitState as GitState).repoFullName,
 			statusKey: nextStatus,
 			repo: gitState.repo ?? state.repo,
@@ -314,11 +320,14 @@ export default function alignment(pi: ExtensionAPI) {
 
 	pi.on("before_agent_start", async (event, ctx) => {
 		if (!getConfig(ctx)) return;
+		const recentPrompts = appendRecentPrompt(state.recentPrompts, event.prompt);
 		if (state.mode === "idle") {
-			saveState({ mode: "pending", pendingPrompt: event.prompt });
+			saveState({ mode: "pending", pendingPrompt: event.prompt, recentPrompts });
 			updateStatus(ctx);
 		} else if (state.mode === "pending") {
-			saveState({ pendingPrompt: event.prompt });
+			saveState({ pendingPrompt: event.prompt, recentPrompts });
+		} else {
+			saveState({ recentPrompts });
 		}
 	});
 
@@ -363,7 +372,7 @@ export default function alignment(pi: ExtensionAPI) {
 			}
 
 			const previousMode = state.mode;
-			const pendingPrompt = args.trim() || state.pendingPrompt || "Track current work manually";
+			const pendingPrompt = args.trim() || getPromptSeed();
 			saveState({ mode: "pending", pendingPrompt });
 			updateStatus(ctx);
 			creationInFlight = true;

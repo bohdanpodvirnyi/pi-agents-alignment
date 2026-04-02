@@ -27,11 +27,14 @@ async function handlePrompt(_input, sessionId, cwd) {
 
 	const state = readState(sessionId);
 	const prompt = _input.user_prompt ?? "";
+	const recentPrompts = appendRecentPrompt(state.recentPrompts, prompt);
 
 	if (state.mode === "idle") {
-		writeState(sessionId, { ...state, mode: "pending", pendingPrompt: prompt });
+		writeState(sessionId, { ...state, mode: "pending", pendingPrompt: prompt, recentPrompts });
 	} else if (state.mode === "pending") {
-		writeState(sessionId, { ...state, pendingPrompt: prompt });
+		writeState(sessionId, { ...state, pendingPrompt: prompt, recentPrompts });
+	} else {
+		writeState(sessionId, { ...state, recentPrompts });
 	}
 }
 
@@ -81,7 +84,7 @@ async function handleCommand(command, sessionId, cwd) {
 			break;
 		}
 		case "unlink": {
-			writeState(sessionId, { mode: "unlinked" });
+			writeState(sessionId, { ...state, mode: "unlinked", pendingPrompt: undefined });
 			console.log("alignment stopped");
 			break;
 		}
@@ -95,7 +98,7 @@ async function handleCommand(command, sessionId, cwd) {
 				console.log("alignment not configured");
 				break;
 			}
-			const pendingPrompt = state.pendingPrompt?.trim() || "Track current work manually";
+			const pendingPrompt = getPromptSeed(state);
 			writeState(sessionId, { ...state, mode: "pending", pendingPrompt });
 			await createOrLinkItem(sessionId, cwd, config, { ...state, mode: "pending", pendingPrompt });
 			const nextState = readState(sessionId);
@@ -150,7 +153,7 @@ async function createOrLinkItem(sessionId, cwd, config, state) {
 			Promise.resolve(runWorker(cwd, { command: "projectSnapshot" })),
 		]);
 	} catch {
-		writeState(sessionId, { mode: "idle" });
+		writeState(sessionId, { ...state, mode: "idle", pendingPrompt: undefined });
 		return;
 	}
 
@@ -164,6 +167,7 @@ async function createOrLinkItem(sessionId, cwd, config, state) {
 		const effectiveKey = rawKey === "todo" ? "inProgress" : rawKey;
 
 		writeState(sessionId, {
+			...state,
 			mode: "aligned",
 			itemId: branchMatch.id,
 			itemTitle: branchMatch.title,
@@ -190,8 +194,9 @@ async function createOrLinkItem(sessionId, cwd, config, state) {
 			});
 		}
 	} else {
-		const title = generateSummary(state.pendingPrompt ?? "Untitled work");
-		const body = buildDraftBody(state.pendingPrompt ?? "", gitState);
+		const promptSeed = getPromptSeed(state);
+		const title = generateSummary(promptSeed);
+		const body = buildDraftBody(promptSeed, gitState);
 
 		let created;
 		try {
@@ -206,11 +211,12 @@ async function createOrLinkItem(sessionId, cwd, config, state) {
 				agent: "claude-code",
 			});
 		} catch {
-			writeState(sessionId, { mode: "idle" });
+			writeState(sessionId, { ...state, mode: "idle", pendingPrompt: undefined });
 			return;
 		}
 
 		writeState(sessionId, {
+			...state,
 			mode: "aligned",
 			itemId: created.itemId,
 			itemTitle: created.title,
@@ -306,11 +312,12 @@ async function recoverMissingItem(sessionId, cwd, config, state, nextStatus, ext
 		}
 	}
 
-	const title = state.itemTitle ?? generateSummary(state.pendingPrompt ?? "Untitled work");
+	const promptSeed = getPromptSeed(state);
+	const title = state.itemTitle ?? generateSummary(promptSeed);
 	const created = runWorker(cwd, {
 		command: "createItem",
 		title,
-		body: buildDraftBody(state.pendingPrompt ?? title, gitState),
+		body: buildDraftBody(state.pendingPrompt ?? promptSeed, gitState),
 		repoFullName: gitState.repoFullName,
 		statusKey: nextStatus,
 		repo: gitState.repo ?? state.repo,
@@ -477,6 +484,11 @@ const LEADING_PHRASES = [
 	/^help me\s+/i,
 ];
 
+const MAX_RECENT_PROMPTS = 8;
+const SLASH_COMMAND_RE = /^\/\S+/;
+const LIGHTWEIGHT_FOLLOW_UP_RE =
+	/^(yes|yeah|yep|yup|ok|okay|sure|also|and|plus|pls|please|thanks|thx|do it|go ahead|continue|ship it|push( it)?|commit( it)?|release( it)?|tag( it)?|new tag as well|update docs|docs)$/i;
+
 function generateSummary(prompt) {
 	const singleLine = prompt.replace(/```[\s\S]*?```/g, " ").replace(/\s+/g, " ").trim();
 	const firstSentence = singleLine.split(/[.!?]\s/)[0] ?? singleLine;
@@ -486,6 +498,37 @@ function generateSummary(prompt) {
 	if (!summary) summary = "Untitled work";
 	if (summary.length > 72) summary = `${summary.slice(0, 69).trimEnd()}...`;
 	return summary.charAt(0).toUpperCase() + summary.slice(1);
+}
+
+function appendRecentPrompt(prompts, prompt) {
+	const cleaned = normalizePrompt(prompt);
+	if (!cleaned) return prompts ?? [];
+	const next = [...(prompts ?? [])];
+	if (next[next.length - 1] !== cleaned) next.push(cleaned);
+	return next.slice(-MAX_RECENT_PROMPTS);
+}
+
+function inferPromptFromHistory(prompts) {
+	const cleaned = (prompts ?? []).map(normalizePrompt).filter(Boolean);
+	if (cleaned.length === 0) return undefined;
+	for (let i = cleaned.length - 1; i >= 0; i -= 1) {
+		const prompt = cleaned[i];
+		if (SLASH_COMMAND_RE.test(prompt)) continue;
+		if (!isLightweightFollowUp(prompt)) return prompt;
+	}
+	return cleaned.find((prompt) => !SLASH_COMMAND_RE.test(prompt));
+}
+
+function getPromptSeed(state) {
+	return state.pendingPrompt?.trim() || inferPromptFromHistory(state.recentPrompts) || "Current session work";
+}
+
+function normalizePrompt(prompt) {
+	return String(prompt ?? "").replace(/```[\s\S]*?```/g, " ").replace(/\s+/g, " ").trim();
+}
+
+function isLightweightFollowUp(prompt) {
+	return prompt.length <= 24 || LIGHTWEIGHT_FOLLOW_UP_RE.test(prompt);
 }
 
 // ── Worker ──────────────────────────────────────────────────────────────
