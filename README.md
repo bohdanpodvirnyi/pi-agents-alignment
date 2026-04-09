@@ -32,17 +32,17 @@ pi install git:github.com/bohdanpodvirnyi/coding-agents-alignment
 
 ### Claude Code
 
-From npm:
-
-```bash
-npm install -g coding-agents-alignment
-ln -s "$(npm root -g)/coding-agents-alignment/claude-code-plugin" ~/.claude/plugins/coding-agents-alignment
-```
-
 From a local checkout:
 
 ```bash
-ln -s /path/to/coding-agents-alignment/claude-code-plugin ~/.claude/plugins/coding-agents-alignment
+claude --plugin-dir /path/to/coding-agents-alignment/claude-code-plugin
+```
+
+Or install from npm first:
+
+```bash
+npm install -g coding-agents-alignment
+claude --plugin-dir "$(npm root -g)/coding-agents-alignment/claude-code-plugin"
 ```
 
 See [`claude-code-plugin/README.md`](./claude-code-plugin/README.md) for Claude Code–specific details.
